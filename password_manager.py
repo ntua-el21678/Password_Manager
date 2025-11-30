@@ -5,6 +5,9 @@ from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 import tempfile
 import os
+import json
+import string
+import secrets
 file_path = ".\\password.txt"
 
 try:
@@ -82,6 +85,36 @@ def encrypt_site_name(site):
     except (ValueError, KeyError) as e:
         print(f"An error occurred: {e}")
         return None, None, None
+
+def encrypt_entry(entry_dict):
+    """Encrypt a full entry dictionary (title, username, password, url, notes, category, type)"""
+    salt, key = read_key()
+    if key is None:
+        return None, None, None
+    try:
+        # Convert dict to JSON string
+        json_str = json.dumps(entry_dict, ensure_ascii=False)
+        cipher = AES.new(key, AES.MODE_GCM)
+        ciphertext, tag = cipher.encrypt_and_digest(json_str.encode('utf-8'))
+        nonce = cipher.nonce
+        return ciphertext, nonce, tag
+    except (ValueError, KeyError) as e:
+        print(f"An error occurred: {e}")
+        return None, None, None
+
+def decrypt_entry(ciphertext, nonce, tag):
+    """Decrypt a full entry and return dictionary"""
+    salt, key = read_key()
+    if key is None:
+        return None
+    try:
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        plaintext_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+        json_str = plaintext_bytes.decode("utf-8")
+        return json.loads(json_str)
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
+        print(f"An error occurred: {e}")
+        return None
 def decrypt_message_og(site):
     salt, key = read_key()
     if key is None:
@@ -193,6 +226,40 @@ def new_key(user_input):
     with open('.\\login.txt', 'w') as file:
         file.writelines(data)
 
+def generate_password(length=16, use_uppercase=True, use_lowercase=True, use_digits=True, use_symbols=True):
+    """Generate a secure random password"""
+    if length < 4:
+        length = 4
+    
+    characters = ""
+    required_chars = []
+    
+    if use_lowercase:
+        characters += string.ascii_lowercase
+        required_chars.append(secrets.choice(string.ascii_lowercase))
+    if use_uppercase:
+        characters += string.ascii_uppercase
+        required_chars.append(secrets.choice(string.ascii_uppercase))
+    if use_digits:
+        characters += string.digits
+        required_chars.append(secrets.choice(string.digits))
+    if use_symbols:
+        symbols = "!@#$%^&*"
+        characters += symbols
+        required_chars.append(secrets.choice(symbols))
+    
+    if not characters:
+        characters = string.ascii_letters + string.digits
+    
+    # Generate remaining characters
+    remaining_length = length - len(required_chars)
+    password_chars = required_chars + [secrets.choice(characters) for _ in range(remaining_length)]
+    
+    # Shuffle to avoid predictable pattern
+    secrets.SystemRandom().shuffle(password_chars)
+    
+    return ''.join(password_chars)
+
 def write_file_atomic(filepath, data):
     """Atomically write data to file to prevent corruption"""
     dir_path = os.path.dirname(filepath) or '.'
@@ -214,6 +281,198 @@ def backup_passwords():
         data = file.readlines()
     # Atomic write to backup
     write_file_atomic(".\\backup.txt", data)
+
+def save_entry(title, username="", password="", url="", notes="", category="General", entry_type="password"):
+    """Save a new entry with custom fields
+    
+    Args:
+        title: Entry title (required)
+        username: Username/email (optional)
+        password: Password (optional)
+        url: Website URL (optional)
+        notes: Additional notes (optional)
+        category: Category/folder (default: General)
+        entry_type: Type of entry - password, note, card, document (default: password)
+    
+    Returns:
+        tuple: (data_no, data_yes) if entry exists, (None, None) if new entry saved
+    """
+    entry_dict = {
+        "title": title,
+        "username": username,
+        "password": password,
+        "url": url,
+        "notes": notes,
+        "category": category,
+        "type": entry_type
+    }
+    
+    entry_cipher, entry_nonce, entry_tag = encrypt_entry(entry_dict)
+    if entry_cipher is None:
+        return None, None
+    
+    with open(file_path, 'r') as file:
+        data = file.readlines()
+    
+    # Check if entry with same title exists
+    existing_index = -1
+    for i, line in enumerate(data):
+        words = line.split()
+        if len(words) >= 3:
+            try:
+                existing_cipher = bytes.fromhex(words[0])
+                existing_nonce = bytes.fromhex(words[1])
+                existing_tag = bytes.fromhex(words[2])
+                existing_entry = decrypt_entry(existing_cipher, existing_nonce, existing_tag)
+                if existing_entry and existing_entry.get("title") == title:
+                    existing_index = i
+                    break
+            except:
+                pass
+    
+    new_line = f"{entry_cipher.hex()} {entry_nonce.hex()} {entry_tag.hex()}\n"
+    
+    if existing_index >= 0:
+        # Entry exists, ask to overwrite
+        data_no = [line for line in data]
+        data_yes = [line for i, line in enumerate(data) if i != existing_index]
+        data_yes.append(new_line)
+        return data_no, data_yes
+    else:
+        # New entry
+        data.append(new_line)
+        write_file_atomic(file_path, data)
+        return None, None
+
+def get_all_entries():
+    """Get all entries as list of dictionaries"""
+    try:
+        with open(file_path, 'r') as file:
+            data = file.readlines()
+    except:
+        return []
+    
+    entries = []
+    for line in data:
+        words = line.split()
+        if len(words) >= 3:
+            try:
+                entry_cipher = bytes.fromhex(words[0])
+                entry_nonce = bytes.fromhex(words[1])
+                entry_tag = bytes.fromhex(words[2])
+                entry_dict = decrypt_entry(entry_cipher, entry_nonce, entry_tag)
+                if entry_dict:
+                    entries.append(entry_dict)
+            except:
+                # Try legacy format
+                if len(words) == 6:
+                    # Old format with separate site and password encryption (GCM)
+                    try:
+                        site_cipher = bytes.fromhex(words[0])
+                        site_nonce = bytes.fromhex(words[1])
+                        site_tag = bytes.fromhex(words[2])
+                        site = decrypt_site_name(site_cipher, site_nonce, site_tag)
+                        
+                        pass_cipher = bytes.fromhex(words[3])
+                        pass_nonce = bytes.fromhex(words[4])
+                        pass_tag = bytes.fromhex(words[5])
+                        
+                        salt, key = read_key()
+                        cipher = AES.new(key, AES.MODE_GCM, nonce=pass_nonce)
+                        password = cipher.decrypt_and_verify(pass_cipher, pass_tag).decode('utf-8')
+                        
+                        # Convert to new format
+                        entry = {
+                            "title": site,
+                            "username": "",
+                            "password": password,
+                            "url": "",
+                            "notes": "",
+                            "category": "General",
+                            "type": "password"
+                        }
+                        entries.append(entry)
+                    except:
+                        pass
+                elif len(words) == 3:
+                    # Very old format: site_hex pass_cipher iv (CBC mode)
+                    try:
+                        site_hex = words[0]
+                        site = bytes.fromhex(site_hex).decode('utf-8')
+                        pass_cipher = bytes.fromhex(words[1])
+                        iv = bytes.fromhex(words[2])
+                        
+                        salt, key = read_key()
+                        # For old CBC format, if we have new key format, we need to use old key derivation
+                        if salt is not None:
+                            # Can't decrypt old CBC with new key - skip it
+                            pass
+                        else:
+                            # Use the old key (SHA256 only)
+                            cipher = AES.new(key, AES.MODE_CBC, iv)
+                            password = unpad(cipher.decrypt(pass_cipher), AES.block_size).decode('utf-8')
+                            
+                            # Convert to new format
+                            entry = {
+                                "title": site,
+                                "username": "",
+                                "password": password,
+                                "url": "",
+                                "notes": "",
+                                "category": "General",
+                                "type": "password"
+                            }
+                            entries.append(entry)
+                    except Exception as e:
+                        pass
+    return entries
+
+def get_entry_by_title(title):
+    """Get a specific entry by title"""
+    entries = get_all_entries()
+    for entry in entries:
+        if entry.get("title") == title:
+            return entry
+    return None
+
+def delete_entry(title):
+    """Delete an entry by title
+    
+    Returns:
+        tuple: (data_no, data_yes) for confirmation
+    """
+    with open(file_path, 'r') as file:
+        data = file.readlines()
+    
+    data_no = [line for line in data]
+    data_yes = []
+    
+    for line in data:
+        words = line.split()
+        if len(words) >= 3:
+            try:
+                entry_cipher = bytes.fromhex(words[0])
+                entry_nonce = bytes.fromhex(words[1])
+                entry_tag = bytes.fromhex(words[2])
+                entry = decrypt_entry(entry_cipher, entry_nonce, entry_tag)
+                if entry and entry.get("title") != title:
+                    data_yes.append(line)
+            except:
+                data_yes.append(line)
+        else:
+            data_yes.append(line)
+    
+    return data_no, data_yes
+
+def get_categories():
+    """Get list of all unique categories"""
+    entries = get_all_entries()
+    categories = set()
+    for entry in entries:
+        cat = entry.get("category", "General")
+        if cat:
+            categories.add(cat)
+    return sorted(list(categories)) if categories else ["General"]
 
 def choice_1(site, password):
     # Encrypt both site name and password
