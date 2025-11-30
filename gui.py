@@ -1,6 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox
-from password_manager import check_key,get_sites,decrypt_message_og,choice_1,new_key,encrypt_with_new_key,read_key,backup_passwords
+from password_manager import check_key,get_sites,decrypt_message_og,choice_1,new_key,encrypt_with_new_key,read_key,backup_passwords,write_file_atomic
 
 def on_click(event,site):
     # Get the widget that triggered the event
@@ -41,11 +41,9 @@ def create_new_window():
             choice=messagebox.askquestion("Overwrite","Site already exist.Overwrite?",icon='warning')
             file_path=".\\password.txt"
             if(choice=='yes'):
-                with open(file_path, 'w') as file:
-                    file.writelines(data_yes)
+                write_file_atomic(file_path, data_yes)
             elif(choice=='no'):
-                with open(file_path, 'w') as file:
-                    file.writelines(data_no)
+                write_file_atomic(file_path, data_no)
         for widget in cross_window.winfo_children():
            widget.destroy()
         new_window.destroy()
@@ -89,11 +87,9 @@ def modify_window():
             choice=messagebox.askquestion("Overwrite","Overwrite?",icon='warning')
             file_path=".\\password.txt"
             if(choice=='yes'):
-                with open(file_path, 'w') as file:
-                    file.writelines(data_yes)
+                write_file_atomic(file_path, data_yes)
             elif(choice=='no'):
-                with open(file_path, 'w') as file:
-                    file.writelines(data_no)
+                write_file_atomic(file_path, data_no)
         for widget in cross_window.winfo_children():
            widget.destroy()
         modify_new_window.destroy()
@@ -127,13 +123,30 @@ def delete_window():
             choice=messagebox.askquestion("Delete","Delete?",icon='warning')
             file_path=".\\password.txt"
             if(choice=='yes'):
-                site=site.encode('utf-8')
-                data_yes = [line for line in data_no if site.hex() not in line]
-                with open(file_path, 'w') as file:
-                    file.writelines(data_yes)
+                # Find and remove the site entry properly
+                sites = get_sites()
+                if site in sites:
+                    data_yes = []
+                    from password_manager import decrypt_site_name
+                    for line in data_no:
+                        words = line.split()
+                        if len(words) >= 6:
+                            site_cipher = bytes.fromhex(words[0])
+                            site_nonce = bytes.fromhex(words[1])
+                            site_tag = bytes.fromhex(words[2])
+                            decrypted = decrypt_site_name(site_cipher, site_nonce, site_tag)
+                            if decrypted != site:
+                                data_yes.append(line)
+                        else:
+                            # Legacy format check
+                            try:
+                                if bytes.fromhex(words[0]).decode('utf-8') != site:
+                                    data_yes.append(line)
+                            except:
+                                data_yes.append(line)
+                    write_file_atomic(file_path, data_yes)
             elif(choice=='no'):
-                with open(file_path, 'w') as file:
-                    file.writelines(data_no)
+                write_file_atomic(file_path, data_no)
         for widget in cross_window.winfo_children():
            widget.destroy()
         delete_new_window.destroy()
