@@ -34,4 +34,4 @@ Security:
 
 To create the executable file simply write in cmd 	
 
-	python -m PyInstaller --onefile -w  gui.py
+	python -m PyInstaller --onefile -w  gui_enhanced.py
