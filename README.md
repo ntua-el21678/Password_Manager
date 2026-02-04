@@ -35,3 +35,4 @@ Security:
 To create the executable file simply write in cmd 	
 
 	python -m PyInstaller --onefile -w  gui_enhanced.py
+  python -m PyInstaller --onefile -w --name "Password Manager" --distpath "./Password Manager Folder" gui_modern.py
