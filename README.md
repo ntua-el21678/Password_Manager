@@ -2,6 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Flet](https://img.shields.io/badge/Built%20with-Flet-purple)
+
 --Description--
 
 A simple application written in python script where you can store your passwords. Each password is related to one account(e.g. facebook,gmail,steam etc.).
