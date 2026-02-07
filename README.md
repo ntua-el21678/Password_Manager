@@ -37,4 +37,4 @@ Security:
 
 To create the executable file simply navigate to the gui_modern.py directory and execute in cmd
 
-	python -m PyInstaller --onefile -w --name "Password Manager" --distpath "./Cool name folder Folder" gui_modern.py
+	flet pack gui_modern.py
